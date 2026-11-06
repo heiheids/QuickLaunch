@@ -8,8 +8,6 @@
 纯 Rust + Win32/GDI+ 实现的磁贴式快捷启动器。
 **零第三方依赖**（`Cargo.toml` 里 `[dependencies]` 为空），单文件绿色运行，体积约 **385 KB**。
 
-![主界面](分析/screens/v3_final_crop.png)
-
 ## 一、构建
 
 ```powershell
