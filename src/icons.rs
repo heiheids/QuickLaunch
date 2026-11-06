@@ -63,12 +63,15 @@ impl IconStore {
     }
 
     /// 根据（解析后的）图标来源路径取图标；返回 GDI+ 位图句柄（内部持有，勿释放）
-    pub fn get(&mut self, src: &str, hint_file: &str) -> GpImage {
-        let key = if !hint_file.is_empty() {
+    /// size 是界面上的显示尺寸：决定向系统要多大分辨率的图标
+    pub fn get(&mut self, src: &str, hint_file: &str, size: i32) -> GpImage {
+        let want = size.clamp(16, 256).max(48);
+        let base = if !hint_file.is_empty() {
             fnv2(src, hint_file)
         } else {
             fnv(src)
         };
+        let key = base ^ (want as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         if let Some(e) = self.map.get(&key) {
             return e.img;
         }
@@ -92,7 +95,7 @@ impl IconStore {
         let mut pixels: Vec<u32> = Vec::new();
         let mut w = 0;
         let mut h = 0;
-        extract_icon(src, &mut w, &mut h, &mut pixels);
+        extract_icon(src, want, &mut w, &mut h, &mut pixels);
         if w <= 0 || h <= 0 {
             let e = Entry { img: std::ptr::null_mut(), _buf: Box::new([]) };
             self.map.insert(key, e);
@@ -112,7 +115,7 @@ impl IconStore {
 
 fn load_icn(p: &Path) -> Option<(GpImage, Box<[u32]>)> {
     let data = fs::read(p).ok()?;
-    if data.len() < 13 || &data[0..5] != b"ICON3" {
+    if data.len() < 13 || &data[0..5] != b"ICON4" {
         return None;
     }
     let w = u32::from_le_bytes([data[5], data[6], data[7], data[8]]) as i32;
@@ -133,7 +136,7 @@ fn load_icn(p: &Path) -> Option<(GpImage, Box<[u32]>)> {
 
 fn save_icn(p: &Path, w: i32, h: i32, px: &[u32]) {
     let mut out = Vec::with_capacity(13 + px.len() * 4);
-    out.extend_from_slice(b"ICON3");
+    out.extend_from_slice(b"ICON4");
     out.extend_from_slice(&(w as u32).to_le_bytes());
     out.extend_from_slice(&(h as u32).to_le_bytes());
     for v in px {
@@ -142,44 +145,296 @@ fn save_icn(p: &Path, w: i32, h: i32, px: &[u32]) {
     let _ = fs::write(p, out);
 }
 
-fn extract_icon(src: &str, w: &mut i32, h: &mut i32, out: &mut Vec<u32>) {
+fn is_image_path(p: &str) -> bool {
+    let ext = match Path::new(p).extension() {
+        Some(e) => e.to_string_lossy().to_lowercase(),
+        None => return false,
+    };
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "ico" | "tif" | "tiff"
+    )
+}
+
+/// 把图片等比缩到 max 边长以内，返回预乘 ARGB 像素，用作图标
+fn image_thumb(path: &str, max: i32) -> Option<(i32, i32, Vec<u32>)> {
     unsafe {
+        let src = gp_image_from_file(path);
+        if src.is_null() {
+            return None;
+        }
+        let mut iw: u32 = 0;
+        let mut ih: u32 = 0;
+        GdipGetImageWidth(src, &mut iw);
+        GdipGetImageHeight(src, &mut ih);
+        if iw == 0 || ih == 0 {
+            gp_dispose(src);
+            return None;
+        }
+        let (iw, ih) = (iw as i32, ih as i32);
+        let scale = (max as f32 / iw as f32).min(max as f32 / ih as f32).min(1.0);
+        let tw = ((iw as f32 * scale).round() as i32).max(1);
+        let th = ((ih as f32 * scale).round() as i32).max(1);
+
+        let mut bmp: GpImage = std::ptr::null_mut();
+        let st = GdipCreateBitmapFromScan0(
+            tw,
+            th,
+            tw * 4,
+            PIXEL_FORMAT_32BPP_PARGB_PUB,
+            std::ptr::null_mut(),
+            &mut bmp,
+        );
+        if st != 0 || bmp.is_null() {
+            gp_dispose(src);
+            return None;
+        }
+        let mut g: GpGraphics = std::ptr::null_mut();
+        GdipGetImageGraphicsContext(bmp, &mut g);
+        GdipGraphicsClear(g, 0);
+        GdipSetInterpolationMode(g, 7); // HighQualityBicubic
+        GdipSetPixelOffsetMode(g, 4); // Half
+        GdipSetCompositingQuality(g, 1); // HighSpeed
+        GdipDrawImageRectRect(
+            g,
+            src,
+            0.0,
+            0.0,
+            tw as f32,
+            th as f32,
+            0.0,
+            0.0,
+            iw as f32,
+            ih as f32,
+            UNIT_PIXEL,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        GdipDeleteGraphics(g);
+
+        let mut data: BitmapData = std::mem::zeroed();
+        let rc = GpRect { X: 0, Y: 0, Width: tw, Height: th };
+        let mut out: Vec<u32> = Vec::new();
+        if GdipBitmapLockBits(bmp, &rc, 1, PIXEL_FORMAT_32BPP_PARGB_PUB, &mut data) == 0 {
+            out.reserve((tw * th) as usize);
+            for y in 0..th {
+                let row = data.scan0.offset((y * data.stride) as isize) as *const u32;
+                for x in 0..tw {
+                    out.push(*row.offset(x as isize));
+                }
+            }
+            GdipBitmapUnlockBits(bmp, &mut data);
+        }
+        gp_dispose(bmp);
+        gp_dispose(src);
+        if out.is_empty() {
+            None
+        } else {
+            Some((tw, th, out))
+        }
+    }
+}
+
+#[repr(C)]
+struct Guid {
+    d1: u32,
+    d2: u16,
+    d3: u16,
+    d4: [u8; 8],
+}
+
+const IID_IIMAGELIST: Guid = Guid {
+    d1: 0x46EB_5926,
+    d2: 0x582E,
+    d3: 0x4017,
+    d4: [0x9F, 0xDF, 0xE8, 0x99, 0x8D, 0xAA, 0x09, 0x50],
+};
+
+const SHIL_EXTRALARGE: i32 = 2;
+const SHIL_JUMBO: i32 = 4;
+const ILD_TRANSPARENT: u32 = 1;
+const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
+
+#[repr(C)]
+struct IImageListVtbl {
+    qi: *const std::ffi::c_void,
+    add_ref: *const std::ffi::c_void,
+    release: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
+    add: *const std::ffi::c_void,
+    replace_icon: *const std::ffi::c_void,
+    set_overlay: *const std::ffi::c_void,
+    replace: *const std::ffi::c_void,
+    add_masked: *const std::ffi::c_void,
+    draw: *const std::ffi::c_void,
+    remove: *const std::ffi::c_void,
+    get_icon: unsafe extern "system" fn(*mut std::ffi::c_void, i32, u32, *mut HICON) -> i32,
+}
+
+#[link(name = "shell32")]
+extern "system" {
+    fn SHGetImageList(list: i32, riid: *const Guid, out: *mut *mut std::ffi::c_void) -> i32;
+}
+
+/// 从系统图像列表取指定索引的图标（大尺寸用 jumbo 256×256）
+unsafe fn image_list_icon(idx: i32, want: i32) -> HICON {
+    if idx < 0 {
+        return std::ptr::null_mut();
+    }
+    let shil = if want > 48 { SHIL_JUMBO } else { SHIL_EXTRALARGE };
+    let mut iml: *mut std::ffi::c_void = std::ptr::null_mut();
+    if SHGetImageList(shil, &IID_IIMAGELIST, &mut iml) != 0 || iml.is_null() {
+        return std::ptr::null_mut();
+    }
+    let vtbl = *(iml as *const *const IImageListVtbl);
+    let mut hicon: HICON = std::ptr::null_mut();
+    let hr = ((*vtbl).get_icon)(iml, idx, ILD_TRANSPARENT, &mut hicon);
+    ((*vtbl).release)(iml);
+    if hr == 0 && !hicon.is_null() {
+        hicon
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+unsafe fn image_list_icon_by_pidl(pidl: *const std::ffi::c_void, want: i32) -> HICON {
+    let mut info: SHFILEINFOW = std::mem::zeroed();
+    SHGetFileInfoW(
+        pidl as LPCWSTR,
+        0,
+        &mut info,
+        std::mem::size_of::<SHFILEINFOW>() as u32,
+        SHGFI_SYSICONINDEX | SHGFI_PIDL,
+    );
+    image_list_icon(info.iIcon, want)
+}
+
+unsafe fn image_list_icon_by_path(ws: &[u16], want: i32) -> HICON {
+    let mut info: SHFILEINFOW = std::mem::zeroed();
+    SHGetFileInfoW(
+        ws.as_ptr(),
+        0,
+        &mut info,
+        std::mem::size_of::<SHFILEINFOW>() as u32,
+        SHGFI_SYSICONINDEX,
+    );
+    image_list_icon(info.iIcon, want)
+}
+
+/// 把任意 GDI+ 位图缩放到指定尺寸，返回预乘 ARGB 像素
+unsafe fn scale_gp(src: GpImage, tw: i32, th: i32) -> Option<(i32, i32, Vec<u32>)> {
+    let mut bmp: GpImage = std::ptr::null_mut();
+    let st = GdipCreateBitmapFromScan0(
+        tw,
+        th,
+        tw * 4,
+        PIXEL_FORMAT_32BPP_PARGB_PUB,
+        std::ptr::null_mut(),
+        &mut bmp,
+    );
+    if st != 0 || bmp.is_null() {
+        return None;
+    }
+    let mut sw: u32 = 0;
+    let mut sh: u32 = 0;
+    GdipGetImageWidth(src, &mut sw);
+    GdipGetImageHeight(src, &mut sh);
+    let mut g: GpGraphics = std::ptr::null_mut();
+    GdipGetImageGraphicsContext(bmp, &mut g);
+    GdipGraphicsClear(g, 0);
+    GdipSetInterpolationMode(g, 7); // HighQualityBicubic
+    GdipSetPixelOffsetMode(g, 4); // Half
+    GdipSetCompositingQuality(g, 1); // HighSpeed
+    GdipDrawImageRectRect(
+        g,
+        src,
+        0.0,
+        0.0,
+        tw as f32,
+        th as f32,
+        0.0,
+        0.0,
+        sw as f32,
+        sh as f32,
+        UNIT_PIXEL,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+    GdipDeleteGraphics(g);
+
+    let mut data: BitmapData = std::mem::zeroed();
+    let rc = GpRect { X: 0, Y: 0, Width: tw, Height: th };
+    let mut out: Vec<u32> = Vec::new();
+    if GdipBitmapLockBits(bmp, &rc, 1, PIXEL_FORMAT_32BPP_PARGB_PUB, &mut data) == 0 {
+        out.reserve((tw * th) as usize);
+        for y in 0..th {
+            let row = data.scan0.offset((y * data.stride) as isize) as *const u32;
+            for x in 0..tw {
+                out.push(*row.offset(x as isize));
+            }
+        }
+        GdipBitmapUnlockBits(bmp, &mut data);
+    }
+    gp_dispose(bmp);
+    if out.is_empty() {
+        None
+    } else {
+        Some((tw, th, out))
+    }
+}
+
+/// 把已有像素缩到 max 边长以内
+unsafe fn scale_pixels(pw: i32, ph: i32, px: &[u32], max: i32) -> Option<(i32, i32, Vec<u32>)> {
+    let scale = (max as f32 / pw as f32).min(max as f32 / ph as f32).min(1.0);
+    let tw = ((pw as f32 * scale).round() as i32).max(1);
+    let th = ((ph as f32 * scale).round() as i32).max(1);
+    if tw >= pw && th >= ph {
+        return None;
+    }
+    let mut buf = px.to_vec();
+    let bytes = std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() * 4);
+    let src = gp_image_from_pixels(pw, ph, bytes);
+    if src.is_null() {
+        return None;
+    }
+    let r = scale_gp(src, tw, th);
+    gp_dispose(src);
+    r
+}
+
+fn extract_icon(src: &str, want: i32, w: &mut i32, h: &mut i32, out: &mut Vec<u32>) {
+    unsafe {
+        // 图片文件：直接用缩略图当图标
+        if is_image_path(src) {
+            if let Some((tw, th, px)) = image_thumb(src, 128) {
+                *w = tw;
+                *h = th;
+                *out = px;
+                return;
+            }
+        }
         let mut hicon: HICON = std::ptr::null_mut();
         let mut id: u32 = 0;
         let ws = wide(src);
-        // shell 命名空间（此电脑 / 回收站）：先解析成 PIDL 再取图标
+        // shell 命名空间（此电脑 / 回收站）：走系统图像列表拿高分辨率图标
         if src.starts_with("::") {
             let mut pidl: *mut std::ffi::c_void = std::ptr::null_mut();
             if SHParseDisplayName(ws.as_ptr(), std::ptr::null_mut(), &mut pidl, 0, std::ptr::null_mut()) == 0
                 && !pidl.is_null()
             {
-                let mut info: SHFILEINFOW = std::mem::zeroed();
-                SHGetFileInfoW(
-                    pidl as LPCWSTR,
-                    0,
-                    &mut info,
-                    std::mem::size_of::<SHFILEINFOW>() as u32,
-                    SHGFI_ICON | SHGFI_LARGEICON | SHGFI_PIDL,
-                );
-                hicon = info.hIcon;
+                hicon = image_list_icon_by_pidl(pidl, want);
                 CoTaskMemFree(pidl);
             }
         }
         let n = if hicon.is_null() {
-            PrivateExtractIconsW(ws.as_ptr(), 0, 48, 48, &mut hicon, &mut id, 1, 0)
+            PrivateExtractIconsW(ws.as_ptr(), 0, want, want, &mut hicon, &mut id, 1, 0)
         } else {
             1
         };
         if n == 0 || hicon.is_null() {
-            let mut info: SHFILEINFOW = std::mem::zeroed();
-            SHGetFileInfoW(
-                ws.as_ptr(),
-                0,
-                &mut info,
-                std::mem::size_of::<SHFILEINFOW>() as u32,
-                SHGFI_ICON | SHGFI_LARGEICON,
-            );
-            hicon = info.hIcon;
+            // .lnk / 文档等取不到图标资源的，用系统图像列表（256 的 jumbo 列表）
+            hicon = image_list_icon_by_path(&ws, want);
         }
         if hicon.is_null() {
             // 用扩展名取通用图标
@@ -209,6 +464,15 @@ fn extract_icon(src: &str, w: &mut i32, h: &mut i32, out: &mut Vec<u32>) {
         // 会返回整块不透明的黑色背景，所以不能只靠它。
         if let Some((rw, rh, px)) = hicon_to_pixels(hicon) {
             DestroyIcon(hicon);
+            // 系统图像列表给的是 256×256，统一缩到需要的尺寸再缓存
+            if rw > want * 2 || rh > want * 2 {
+                if let Some((a, b, c)) = scale_pixels(rw, rh, &px, want) {
+                    *w = a;
+                    *h = b;
+                    *out = c;
+                    return;
+                }
+            }
             *w = rw;
             *h = rh;
             *out = px;

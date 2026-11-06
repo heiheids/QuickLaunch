@@ -677,23 +677,37 @@ impl App {
             }
             self.bg.line(
                 l.title.left as f32 + 1.0,
-                (l.title.bottom - 1) as f32,
+                (l.title.bottom - 1) as f32 + 0.5,
                 (l.title.right - 1) as f32,
-                (l.title.bottom - 1) as f32,
+                (l.title.bottom - 1) as f32 + 0.5,
                 1.0,
-                c.c_border,
+                sep_color(c),
             );
         }
 
         // 分组栏底色 + 右边线
         if c.show_group {
             self.bg.fill_rect(l.group.left as f32, l.group.top as f32, l.group.w() as f32, l.group.h() as f32, c.c_group);
-            let gx = (l.group.right - 1) as f32;
-            self.bg.line(gx, l.group.top as f32, gx, l.group.bottom as f32, 1.0, c.c_border);
+            let gx = (l.group.right - 1) as f32 + 0.5;
+            self.bg.line(gx, l.group.top as f32, gx, l.group.bottom as f32, 1.0, sep_color(c));
         }
 
         // 内容区底色
         self.bg.fill_rect(l.body.left as f32, l.body.top as f32, l.body.w() as f32, l.body.h() as f32, c.c_bg);
+
+        // 外边框：和内部分割线同一套推导，只是再深一档
+        let bd = border_color(c);
+        self.bg.stroke_round(
+            RECTF {
+                x: l.panel.left as f32 + 0.5,
+                y: l.panel.top as f32 + 0.5,
+                w: l.panel.w() as f32 - 1.0,
+                h: l.panel.h() as f32 - 1.0,
+            },
+            radius,
+            1.0,
+            bd,
+        );
     }
 
     /// 性能基准（设置环境变量 QL_BENCH=1 启动，结果写入 bench.txt 后退出）
@@ -802,7 +816,7 @@ impl App {
             let lk = &self.db.links[li];
             let src = self.icon_source(lk);
             let hint = if lk.icon.is_empty() || lk.icon.contains('*') { String::new() } else { lk.icon.clone() };
-            imgs.push(self.icons.get(&src, &hint));
+            imgs.push(self.icons.get(&src, &hint, c.icon_size));
         }
         let n = idxs.len().min(l.litems.len());
         let name_font = if c.view == 0 { (fs - 1).max(10) } else { fs };
@@ -2143,7 +2157,7 @@ impl App {
             ID_HIDE => self.toggle_show(),
             ID_ABOUT => unsafe {
                 let t = wide(
-                    "QuickLaunch 1.0.1\n\n\
+                    "QuickLaunch 1.0.2\n\n\
                      作者：黑山大叔\n\
                      主页：https://space.bilibili.com/19428259\n\
                      GitHub：https://github.com/heiheids\n\n\
@@ -2736,6 +2750,25 @@ fn hotkey_text(mods: u32, vk: u32) -> String {
     }
     s.push_str(&vk_name(vk));
     s
+}
+
+/// 功能分区的分割线：在 c_border 基础上再拉开一档对比度
+/// （浅色主题压深、深色主题提亮，两边都能看清）
+fn sep_color(c: &Conf) -> u32 {
+    if luminance(c.c_bg) > 140.0 {
+        mix(c.c_border, rgb(0, 0, 0), 0.34)
+    } else {
+        mix(c.c_border, rgb(255, 255, 255), 0.32)
+    }
+}
+
+/// 窗口外边框：比内部分割线再深一档
+fn border_color(c: &Conf) -> u32 {
+    if luminance(c.c_bg) > 140.0 {
+        mix(c.c_border, rgb(0, 0, 0), 0.56)
+    } else {
+        mix(c.c_border, rgb(255, 255, 255), 0.52)
+    }
 }
 
 fn today_text() -> String {    let mut st: SYSTEMTIME = Default::default();
