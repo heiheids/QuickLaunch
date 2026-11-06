@@ -1,6 +1,11 @@
 # QuickLaunch（迅捷启动 · Rust 版）
+<img width="378" height="639" alt="05" src="https://github.com/user-attachments/assets/f6dc37e8-8b2e-438f-8222-a033e6b9eea9" />
+<img width="378" height="639" alt="04" src="https://github.com/user-attachments/assets/145321ef-498d-49c0-811e-fb06b1ef20b0" />
+<img width="378" height="639" alt="03" src="https://github.com/user-attachments/assets/7aae38c1-2e35-41df-8ce3-8142d6090616" />
+<img width="378" height="639" alt="02" src="https://github.com/user-attachments/assets/48360839-4164-4a83-b203-e62607e90522" />
+<img width="396" height="639" alt="01" src="https://github.com/user-attachments/assets/d9f21d08-479c-4a7f-bfce-01a07448109b" />
 
-纯 Rust + Win32/GDI+ 实现的磁贴式快捷启动器，功能对标 **Lucy 快速启动 1.7.8**。
+纯 Rust + Win32/GDI+ 实现的磁贴式快捷启动器。
 **零第三方依赖**（`Cargo.toml` 里 `[dependencies]` 为空），单文件绿色运行，体积约 **385 KB**。
 
 ![主界面](分析/screens/v3_final_crop.png)
