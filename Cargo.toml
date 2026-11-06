@@ -1,0 +1,22 @@
+[package]
+name = "quicklaunch"
+version = "1.0.1"
+edition = "2021"
+build = "build.rs"
+authors = ["黑山大叔 <https://github.com/heiheids>"]
+description = "A tiny zero-dependency quick launcher for Windows, written in Rust with raw Win32 + GDI+"
+license = "MIT"
+repository = "https://github.com/heiheids/QuickLaunch"
+
+[[bin]]
+name = "QuickLaunch"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
