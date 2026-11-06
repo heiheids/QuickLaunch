@@ -1,6 +1,6 @@
 [package]
 name = "quicklaunch"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 build = "build.rs"
 authors = ["黑山大叔 <https://github.com/heiheids>"]

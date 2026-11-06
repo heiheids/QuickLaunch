@@ -163,6 +163,17 @@ impl Layout {
     }
 }
 
+#[derive(Clone, Copy)]
+struct LinkDrag {
+    /// 按下时的槽位
+    from: usize,
+    /// 当前拖到的槽位
+    to: usize,
+    started: bool,
+    x0: i32,
+    y0: i32,
+}
+
 pub struct App {
     pub hwnd: HWND,
     pub dir: PathBuf,
@@ -189,6 +200,8 @@ pub struct App {
     filter: String,
     /// 多选：选中的链接 ID（按 ID 存，排序/刷新后仍有效）
     sel: Vec<u32>,
+    /// 按住图标拖动改位置
+    ldrag: Option<LinkDrag>,
     last_w: i32,
     last_h: i32,
 }
@@ -231,6 +244,7 @@ impl App {
             tray_icon: std::ptr::null_mut(),
             filter: String::new(),
             sel: Vec::new(),
+            ldrag: None,
             last_w: 0,
             last_h: 0,
         };
@@ -270,11 +284,57 @@ impl App {
         }
     }
 
+    /// 光标落在第几个槽位（超出范围就取最近的）
+    fn slot_at(&self, x: i32, y: i32) -> Option<usize> {
+        let items = &self.layout.litems;
+        if items.is_empty() {
+            return None;
+        }
+        if let Some(i) = items.iter().position(|r| r.contains(x, y)) {
+            return Some(i);
+        }
+        let mut best = 0usize;
+        let mut bd = i32::MAX;
+        for (i, r) in items.iter().enumerate() {
+            let cx = (r.left + r.right) / 2;
+            let cy = (r.top + r.bottom) / 2;
+            let d = (cx - x).abs() + (cy - y).abs();
+            if d < bd {
+                bd = d;
+                best = i;
+            }
+        }
+        Some(best)
+    }
+
+    /// 把 from 槽位的链接挪到 to，写回组内排序
+    fn commit_link_order(&mut self, from: usize, to: usize) {
+        if self.filter.is_empty() {
+            let idxs = self.cur_links();
+            let n = idxs.len();
+            if from < n && to < n && from != to {
+                let mut order: Vec<usize> = (0..n).collect();
+                let v = order.remove(from);
+                order.insert(to, v);
+                for (pos, &i) in order.iter().enumerate() {
+                    if let Some(&li) = idxs.get(i) {
+                        self.db.links[li].order = pos as u32;
+                    }
+                }
+                self.db.save(&self.dir);
+            }
+        }
+        self.repaint();
+    }
+
     fn move_links(&mut self, ids: &[u32], group: u32) {
         let tag = self.db.ensure_tag(group);
+        let mut ord = self.db.next_order(group);
         for id in ids {
             if let Some(i) = self.db.link_index(*id) {
                 self.db.links[i].tag = tag;
+                self.db.links[i].order = ord;
+                ord += 1;
             }
         }
         self.sel.clear();
@@ -820,12 +880,29 @@ impl App {
         }
         let n = idxs.len().min(l.litems.len());
         let name_font = if c.view == 0 { (fs - 1).max(10) } else { fs };
-        for i in 0..n {
+        // 拖动中按临时顺序绘制，图标会跟着手指实时挪位
+        let drag_from = self.ldrag.filter(|d| d.started).map(|d| d.from);
+        let mut order: Vec<usize> = (0..n).collect();
+        if let (Some(f), Some(d)) = (drag_from, self.ldrag) {
+            if f < n && d.to < n && f != d.to {
+                let v = order.remove(f);
+                order.insert(d.to, v);
+            }
+        }
+        for slot in 0..n {
+            let i = order[slot];
             let li = idxs[i];
             let lk = self.db.links[li].clone();
-            let r = l.litems[i];
-            let hot = self.hover == Hit::Link(i);
+            let r = l.litems[slot];
+            let hot = self.hover == Hit::Link(i) && drag_from.is_none();
             let selected = self.is_sel(lk.id);
+            if drag_from == Some(i) {
+                self.canvas.fill_round(
+                    RECTF { x: r.left as f32 + 1.0, y: r.top as f32 + 1.0, w: r.w() as f32 - 2.0, h: r.h() as f32 - 2.0 },
+                    [0.0, 0.0, 0.0, 0.0],
+                    with_alpha(c.c_accent, 70),
+                );
+            }
             if selected {
                 self.canvas.fill_round(
                     RECTF { x: r.left as f32 + 1.0, y: r.top as f32 + 1.0, w: r.w() as f32 - 2.0, h: r.h() as f32 - 2.0 },
@@ -1261,6 +1338,25 @@ impl App {
                     return Some(0);
                 }
                 let h = self.hit_at(x, y);
+                if let Some(mut d) = self.ldrag {
+                    if !d.started && (x - d.x0).abs() + (y - d.y0).abs() > 5 {
+                        d.started = true;
+                    }
+                    if d.started {
+                        if let Some(slot) = self.slot_at(x, y) {
+                            if slot != d.to {
+                                d.to = slot;
+                                self.ldrag = Some(d);
+                                self.repaint();
+                                return Some(0);
+                            }
+                        }
+                    }
+                    self.ldrag = Some(d);
+                    if d.started {
+                        return Some(0);
+                    }
+                }
                 if h != self.hover {
                     self.hover = h;
                     self.repaint();
@@ -1272,6 +1368,11 @@ impl App {
                 let y = ((l >> 16) & 0xffff) as i16 as i32;
                 let h = self.hit_at(x, y);
                 self.pressed = Some(h);
+                if let Hit::Link(i) = h {
+                    if self.filter.is_empty() && self.overlay == Overlay::None {
+                        self.ldrag = Some(LinkDrag { from: i, to: i, started: false, x0: x, y0: y });
+                    }
+                }
                 match h {
                     Hit::Title | Hit::Body | Hit::GroupBar => self.start_drag(),
                     Hit::Edge(dir) => {
@@ -1294,6 +1395,14 @@ impl App {
                 }
                 let was_drag = self.drag_start.take().is_some();
                 let was_resize = self.resize_dir.take().is_some();
+                if let Some(d) = self.ldrag.take() {
+                    if d.started {
+                        self.pressed = None;
+                        self.hover = Hit::None;
+                        self.commit_link_order(d.from, d.to);
+                        return Some(0);
+                    }
+                }
                 let h = self.hit_at(x, y);
                 let pressed = self.pressed.take();
                 if was_resize || was_drag {
@@ -1333,6 +1442,14 @@ impl App {
                 Some(0)
             }
             WM_SETCURSOR => {
+                // 拖动图标过程中才变成手形
+                if self.ldrag.map(|d| d.started).unwrap_or(false) {
+                    unsafe {
+                        let c = LoadCursorW(std::ptr::null_mut(), int_resource(IDC_HAND));
+                        SetCursor(c);
+                    }
+                    return Some(1);
+                }
                 let mut pt = POINT { x: 0, y: 0 };
                 unsafe {
                     GetCursorPos(&mut pt);
@@ -1344,7 +1461,9 @@ impl App {
                     Hit::Edge(HTTOP) | Hit::Edge(HTBOTTOM) => IDC_SIZENS,
                     Hit::Edge(HTTOPLEFT) | Hit::Edge(HTBOTTOMRIGHT) => IDC_SIZENWSE,
                     Hit::Edge(_) => IDC_SIZENESW,
-                    Hit::Link(_) | Hit::Group(_) | Hit::Close | Hit::Menu | Hit::Search | Hit::Row(_) | Hit::InputOk | Hit::InputCancel | Hit::FilterChip | Hit::OverlayBtn(_) => IDC_HAND,
+                    // 图标上保持普通箭头，按下拖动时才变手
+                    Hit::Link(_) => IDC_ARROW,
+                    Hit::Group(_) | Hit::Close | Hit::Menu | Hit::Search | Hit::Row(_) | Hit::InputOk | Hit::InputCancel | Hit::FilterChip | Hit::OverlayBtn(_) => IDC_HAND,
                     Hit::InputField => IDC_IBEAM,
                     _ => IDC_ARROW,
                 };
@@ -2157,7 +2276,7 @@ impl App {
             ID_HIDE => self.toggle_show(),
             ID_ABOUT => unsafe {
                 let t = wide(
-                    "QuickLaunch 1.0.2\n\n\
+                    "QuickLaunch 1.0.3\n\n\
                      作者：黑山大叔\n\
                      主页：https://space.bilibili.com/19428259\n\
                      GitHub：https://github.com/heiheids\n\n\

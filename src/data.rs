@@ -38,6 +38,8 @@ pub struct Link {
     pub remark: String,
     pub run_count: u32,
     pub admin: bool,
+    /// 组内排序（拖动图标改位置时写回；0 表示未排过，按 id 兜底）
+    pub order: u32,
 }
 
 pub struct Db {
@@ -105,6 +107,8 @@ impl Db {
         admin: bool,
     ) -> u32 {
         let id = self.next_id();
+        let group = self.tags.iter().find(|t| t.id == tag).map(|t| t.group).unwrap_or(0);
+        let order = self.next_order(group);
         self.links.push(Link {
             id,
             tag,
@@ -117,6 +121,7 @@ impl Db {
             remark: remark.to_string(),
             run_count: 0,
             admin,
+            order,
         });
         id
     }
@@ -135,8 +140,20 @@ impl Db {
     pub fn links_of_group(&self, group: u32) -> Vec<usize> {
         let tags: Vec<u32> = self.tags.iter().filter(|t| t.group == group).map(|t| t.id).collect();
         let mut v: Vec<usize> = (0..self.links.len()).filter(|&i| tags.contains(&self.links[i].tag)).collect();
-        v.sort_by_key(|&i| self.links[i].id);
+        v.sort_by_key(|&i| (self.links[i].order, self.links[i].id));
         v
+    }
+
+    /// 分组内下一个排序值（新加的 / 移动进来的链接排到末尾）
+    pub fn next_order(&self, group: u32) -> u32 {
+        let tags: Vec<u32> = self.tags.iter().filter(|t| t.group == group).map(|t| t.id).collect();
+        self.links
+            .iter()
+            .filter(|l| tags.contains(&l.tag))
+            .map(|l| l.order)
+            .max()
+            .unwrap_or(0)
+            + 1
     }
 
     /// 取分组的默认标签（没有就建一个），用于向分组内添加链接
@@ -234,6 +251,7 @@ impl Db {
                                 remark: f[9].clone(),
                                 run_count: f[10].parse().unwrap_or(0),
                                 admin: f[11] == "1",
+                                order: f.get(12).and_then(|s| s.parse().ok()).unwrap_or(0),
                             });
                         }
                     }
@@ -268,7 +286,7 @@ impl Db {
         }
         for l in &self.links {
             out.push_str(&format!(
-                "L\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\n",
+                "L\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 l.id,
                 l.tag,
                 esc(&l.name),
@@ -279,7 +297,8 @@ impl Db {
                 esc(&l.icon),
                 esc(&l.remark),
                 l.run_count,
-                if l.admin { 1 } else { 0 }
+                if l.admin { 1 } else { 0 },
+                l.order
             ));
         }
         let _ = fs::write(d.join("links.txt"), out);

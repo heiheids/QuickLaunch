@@ -1,4 +1,4 @@
-QuickLaunch 1.0.2  —  迅捷启动
+QuickLaunch 1.0.3  —  迅捷启动
 ================================================================
 
 一个用 Rust 从零写的 Windows 快捷启动器。
@@ -96,7 +96,7 @@ db\links.txt 是制表符分隔的纯文本，一行一条，用反斜杠转义�
 English
 ================================================================
 
-QuickLaunch 1.0.2
+QuickLaunch 1.0.3
 
 A tiny quick launcher for Windows, written from scratch in Rust.
 Pure Win32 + GDI+ custom drawing, **zero third-party dependencies**,

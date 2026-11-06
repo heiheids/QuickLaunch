@@ -1,5 +1,47 @@
 # 更新说明 / Changelog
 
+## v1.0.3 — 2026-11-06
+
+### 中文
+
+**新增**
+
+- **拖动图标改顺序**：按住图标移动超过 5px 进入拖动，被拖的项实时跟着挪位、其余项自动让位，
+  松手写回顺序并保存。拖动中有 `SetCapture`，拖到窗口外松手也不会乱。
+  搜索筛选状态下不启用（可见项不全，重排会打乱没显示的那些）。
+
+**改进**
+
+- **光标形态**：鼠标划过图标保持普通箭头，按下拖动时才变成手形；分组栏、标题按钮、
+  设置项等可点击区域仍是手形。
+
+**数据**
+
+- `links.txt` 的 L 行最后一列原本是恒为 `0` 的保留字段，现在用作组内排序值（`order`）。
+  排序键为 `(order, id)`，所有 order 都是 0 时行为与旧版完全一致，**旧数据无需迁移**。
+  新加的链接和「移动到」其它分组的链接都按 `组内最大值 + 1` 追加到末尾。
+
+### English
+
+**Added**
+
+- **Drag icons to reorder**: hold an icon and move more than 5 px to start dragging. The dragged
+  item follows the cursor live while the others shift out of the way, and the new order is saved
+  on release. `SetCapture` is used so releasing outside the window is safe. Disabled while a
+  search filter is active.
+
+**Improved**
+
+- **Cursor shape**: hovering an icon keeps the normal arrow; it only turns into a hand while
+  actually dragging. Group bar, title buttons and settings rows keep the hand cursor.
+
+**Data**
+
+- The last column of an `L` row in `links.txt` used to be a reserved `0`; it now stores the
+  in-group sort order. Sorting is by `(order, id)`, so when every order is 0 the behaviour is
+  identical to older versions and **no migration is needed**. New links and links moved to
+  another group are appended at the end (`max + 1`).
+
 ## v1.0.2 — 2026-11-06
 
 ### 中文
