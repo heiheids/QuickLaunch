@@ -202,6 +202,8 @@ pub struct App {
     sel: Vec<u32>,
     /// 按住图标拖动改位置
     ldrag: Option<LinkDrag>,
+    /// 网站图标后台抓取器（网址条目用）
+    fav: crate::favicon::Fetcher,
     last_w: i32,
     last_h: i32,
 }
@@ -219,6 +221,8 @@ impl App {
         };
         let canvas = Canvas::new(conf.w, conf.h);
         let icons = IconStore::new(dir.join("cache").join("icons"));
+        // 网站图标抓取器：后台线程干活，完成后再 PostMessage 回来
+        let fav = crate::favicon::Fetcher::new(dir.join("cache").join("icons"), hwnd as usize);
         let mut app = App {
             hwnd,
             dir,
@@ -245,6 +249,7 @@ impl App {
             filter: String::new(),
             sel: Vec::new(),
             ldrag: None,
+            fav,
             last_w: 0,
             last_h: 0,
         };
@@ -256,9 +261,27 @@ impl App {
         if crate::shortcut::migrate(&mut app.db) {
             app.db.save(&app.dir);
         }
+        // 已有网址条目：把还没图标的补抓一遍（后台进行，不挡启动）
+        app.request_missing_favicons();
         app.last_w = app.conf.w;
         app.last_h = app.conf.h;
         app
+    }
+
+    /// 给所有还没有图标的网址条目排队抓 favicon（同一 URL 只抓一次）
+    fn request_missing_favicons(&mut self) {
+        let urls: Vec<String> = self
+            .db
+            .links
+            .iter()
+            .filter(|l| l.kind == KIND_URL && l.icon.is_empty())
+            .map(|l| l.path.clone())
+            .collect();
+        for u in urls {
+            if self.fav.ready_path(&u).is_none() {
+                self.fav.request(&u);
+            }
+        }
     }
 
     // ---------------- 数据 ----------------
@@ -1488,6 +1511,26 @@ impl App {
                 self.drop_files(w as HANDLE);
                 Some(0)
             }
+            crate::favicon::WM_FAVICON_READY => {
+                // 后台线程说图标抓好了：回填 icon 字段并重绘
+                let mut changed = false;
+                for i in 0..self.db.links.len() {
+                    if self.db.links[i].kind != KIND_URL || !self.db.links[i].icon.is_empty() {
+                        continue;
+                    }
+                    let url = self.db.links[i].path.clone();
+                    if let Some(p) = self.fav.ready_path(&url) {
+                        self.db.links[i].icon = p;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.icons.clear_mem();
+                    self.db.save(&self.dir);
+                    self.repaint();
+                }
+                Some(0)
+            }
             drop::WM_DROP_ITEMS => {
                 let payload = unsafe { Box::from_raw(l as *mut drop::DropPayload) };
                 let mut added = false;
@@ -1994,12 +2037,11 @@ impl App {
             InputAction::AddUrl => {
                 if !text.is_empty() {
                     let url = if text.contains("://") { text.clone() } else { format!("https://{}", text) };
-                    let name = url
-                        .trim_start_matches("https://")
-                        .trim_start_matches("http://")
-                        .trim_end_matches('/')
-                        .to_string();
+                    // 显示名去掉 www. 前缀（真实 URL 保持不变，有些站点必须带 www）
+                    let name = crate::favicon::display_name(&url);
                     self.add_link(&name, KIND_URL, &url);
+                    // 后台抓网站图标，抓好后由 WM_FAVICON_READY 回填
+                    self.fav.request(&url);
                 }
             }
         }
@@ -2281,7 +2323,7 @@ impl App {
             ID_HIDE => self.toggle_show(),
             ID_ABOUT => unsafe {
                 let t = wide(
-                    "QuickLaunch 1.0.6\n\n\
+                    "QuickLaunch 1.0.7\n\n\
                      作者：黑山大叔\n\
                      主页：https://space.bilibili.com/19428259\n\
                      GitHub：https://github.com/heiheids\n\n\

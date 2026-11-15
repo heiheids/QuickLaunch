@@ -3,6 +3,7 @@
 mod app;
 mod data;
 mod drop;
+mod favicon;
 mod gfx;
 mod icons;
 mod shell;

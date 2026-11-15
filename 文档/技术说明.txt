@@ -8,7 +8,8 @@ src/app.rs         主窗口：布局、自绘、命中测试、菜单、设置�
 src/data.rs        数据模型与持久化：conf.ini + db\links.txt 的读写、配色派生
 src/drop.rs        OLE 拖放目标（IDropTarget）：普通文件 + 桌面虚拟项
 src/shortcut.rs    .lnk / .url 解析（v1.0.4 新增，约 320 行）
-src/shell.rs       ★ v1.0.5 新增：Shell 动作（属性窗口、在文件夹中显示）
+src/shell.rs       v1.0.5 新增：Shell 动作（属性窗口、在文件夹中显示）
+src/favicon.rs     ★ v1.0.7 新增：网址图标抓取（WinHTTP + 后台线程）
 src/gfx.rs         GDI+ 封装：圆角矩形、文字、位图、颜色工具
 src/icons.rs       图标提取与缓存（PrivateExtractIcons / 系统图像列表 / 图片缩略图）
 src/win.rs         手写 Win32 FFI 声明（无 windows-rs crate）
@@ -105,3 +106,36 @@ Windows + PowerShell 7：
 本机工具链装在工程内 .rust\ 目录（不入包）：
   RUSTUP_HOME=.rust\rustup  CARGO_HOME=.rust\cargo
   默认 host：x86_64-pc-windows-gnu（自带 MinGW 链接器，无需 VS 生成工具）
+
+七、v1.0.7：网址图标抓取
+----------------------------------------------------------------
+需求：添加网址后要有站点图标；名称去掉 www. 前缀。
+
+实现（src/favicon.rs）：
+  · WinHTTP 直连，零第三方依赖（[link(name="winhttp")]，工具链自带 libwinhttp.a）。
+  · 候选顺序：
+      1) <协议>://<host>/favicon.ico     只用 URL 自身协议试一次
+      2) 首页 HTML 的 <link rel="icon">  跳过 data: 与 .svg
+         （apple-touch-icon 收进来但排在后面，作兜底）
+  · 超时 3 秒、单文件上限 512 KB、只接受 200。
+  · 落盘按真实内容定扩展名（PNG/JPEG/GIF/BMP/ICO），
+    否则 icons.rs 会把 PNG 内容当 ICO 走 PrivateExtractIconsW 而提取失败。
+  · 缓存：cache\icons\fav_<url哈希>.<ext>；Link.icon 直接存该路径，
+    渲染时 icons.get(src, hint) 的第一个分支就能命中。
+
+线程模型（关键）：
+  App::new → favicon::Fetcher::new(cache, hwnd)；内部 spawn worker。
+  request(url) → mpsc 入队；worker 抓完 PostMessageW(hwnd, WM_FAVICON_READY)。
+  主线程收到消息后：遍历 kind==KIND_URL 且 icon 为空的条目，
+  ready_path 命中就回填 icon、save、repaint。全程不阻塞消息循环。
+
+名称：
+  display_name(url) 去掉前 4 个字符的 "www."（大小写无关），
+  只作用于显示名，AddUrl 存的 path 仍是完整 URL。
+
+验证：
+  examples/probe_favicon.rs 用真实产品函数联网测试 5 个站点：
+    bilibili / baidu / zhihu / qq / rust-lang —— 5/5 成功，
+    耗时 36 ~ 2400 ms（rust-lang 走 HTML 备用，最慢）。
+  已确认两种落盘格式都能被图标管线取到：
+    真 ICO → PrivateExtractIcons = true；PNG(.png) → 走 GDI+ 图片分支。

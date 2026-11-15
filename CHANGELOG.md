@@ -1,5 +1,60 @@
 # 更新说明 / Changelog
 
+## v1.0.7 — 2026-11-15
+
+### 中文
+
+**新增**
+
+- **网址自动抓取网站图标**：添加网址后自动去站点取图标，不再是一个空白方块。
+  取图顺序：先试 `<站点>/favicon.ico`；失败再解析首页 HTML 里的
+  `<link rel="icon">`（rust-lang.org 这类没有根 favicon.ico 的站点靠这条），
+  `data:` 内联图标与 svg 会跳过，`apple-touch-icon` 作为兜底候选。
+- 抓取在**后台线程**完成，通过消息通知界面回填，添加网址时不会卡窗口；
+  启动时也会给已有网址条目补齐图标。
+- 图标按真实内容落盘：PNG 存 `.png`、ICO 存 `.ico`。
+  这点很关键——不少站点的 `favicon.ico` 其实是 PNG，若一律按 `.ico` 保存，
+  会走 `PrivateExtractIcons` 提取失败（实测 rust-lang、baidu 就是这种情况）。
+
+**改进**
+
+- **网址名称去掉 `www.` 前缀**：`https://www.bilibili.com/` 显示为 `bilibili.com`。
+  只改显示名，实际访问的 URL 不变（有些站点必须带 www 才能打开）。
+
+**实现**
+
+- 新增 `src/favicon.rs`：WinHTTP（`winhttp.dll`，工具链自带导入库）直连，
+  零第三方依赖；3 秒超时、512 KB 上限；结果缓存在 `cache\icons\fav_*.{ico,png}`。
+- 新增 `examples/probe_favicon.rs`：走产品代码同一路径做真实联网测试。
+
+### English
+
+**Added**
+
+- **Automatic website icons**: adding a URL now fetches the site's icon instead of showing
+  a blank tile. Order: `<site>/favicon.ico` first, then `<link rel="icon">` parsed from the
+  home page HTML (this is what makes sites like rust-lang.org work — they have no root
+  `favicon.ico`). `data:` inline icons and SVGs are skipped; `apple-touch-icon` is a
+  last-resort candidate.
+- Fetching happens on a **background thread** and reports back via a window message, so
+  adding a URL never freezes the UI. Existing URL entries are backfilled on startup.
+- Icons are stored with their real extension: PNG as `.png`, ICO as `.ico`. This matters —
+  many sites serve a PNG from `favicon.ico`, and saving it as `.ico` makes
+  `PrivateExtractIcons` fail (verified with rust-lang and baidu).
+
+**Improved**
+
+- **`www.` prefix is dropped from the display name**: `https://www.bilibili.com/` shows as
+  `bilibili.com`. Only the label changes; the URL actually opened is untouched, since some
+  sites require `www.`.
+
+**Implementation**
+
+- New `src/favicon.rs`: direct WinHTTP (`winhttp.dll`, import library ships with the
+  toolchain), still zero third-party dependencies; 3 s timeout, 512 KB cap, results cached
+  in `cache\icons\fav_*.{ico,png}`.
+- New `examples/probe_favicon.rs` exercises the real production code path over the network.
+
 ## v1.0.6 — 2026-11-15
 
 ### 中文
