@@ -75,3 +75,12 @@ A: Copy the whole folder. All data is relative, no reconfiguration needed.
 Q: Antivirus complains.
 A: Unsigned, tiny, and it launches other programs through ShellExecute —
    a common false positive. Whitelist it if needed.
+
+8. Group pane width (v1.0.8)
+----------------------------------------------------------------
+The vertical line between the group pane and the shortcuts becomes a splitter:
+  - Drag it left/right to resize; the width is saved on release and restored next launch.
+  - Dragged all the way left, the pane shrinks to a single character wide and the content
+    area takes the freed space.
+  - Dragged all the way right, the content area still keeps at least 120 px.
+  - There is a ±3 px tolerance band, so you don't have to hit the exact pixel.

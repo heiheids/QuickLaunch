@@ -1,7 +1,7 @@
-QuickLaunch 1.0.7 源码包
+QuickLaunch 1.0.8 源码包
 ================================================================
 
-本包为 QuickLaunch 1.0.7 的完整源码与技术文档，不含编译产物。
+本包为 QuickLaunch 1.0.8 的完整源码与技术文档，不含编译产物。
 编译方法见 README.txt / README.md，简要步骤：
 
     rustup target add x86_64-pc-windows-gnu

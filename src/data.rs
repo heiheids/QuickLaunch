@@ -519,10 +519,10 @@ impl Conf {
         }
         c.font_size = c.font_size.clamp(11, 20);
         c.icon_size = c.icon_size.clamp(16, 96);
-        c.group_w = c.group_w.clamp(60, 200);
+        // 分组栏最小可缩到一个字宽（具体下限在 build_layout 里按字号再算一次）
         c.w = c.w.clamp(260, 4000);
         c.h = c.h.clamp(200, 4000);
-        c.group_w = c.group_w.clamp(40, 200);
+        c.group_w = c.group_w.clamp(18, 600);
         c.tag_w = c.tag_w.clamp(36, 160);
         c
     }

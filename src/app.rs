@@ -59,6 +59,8 @@ pub enum Hit {
     Body,
     Link(usize),
     Edge(i32),
+    /// 分组栏与内容区之间的分割线（可拖动调整分组栏宽度）
+    Split,
     Row(usize),
     OverlayBtn(usize),
     InputOk,
@@ -189,6 +191,8 @@ pub struct App {
     pressed: Option<Hit>,
     drag_start: Option<(i32, i32, i32, i32)>,
     resize_dir: Option<i32>,
+    /// 正在拖动分组栏分割线
+    split_drag: bool,
     overlay: Overlay,
     input_title: String,
     input_action: InputAction,
@@ -238,6 +242,7 @@ impl App {
             pressed: None,
             drag_start: None,
             resize_dir: None,
+            split_drag: false,
             overlay: Overlay::None,
             input_title: String::new(),
             input_action: InputAction::NewGroup,
@@ -440,7 +445,12 @@ impl App {
         let title_h = if self.conf.show_title { 40 } else { 0 };
         let title = RECT::new(panel.left, panel.top, panel.right, panel.top + title_h);
         let gw = if self.conf.show_group {
-            self.conf.group_w.max(self.conf.font_size * 4 + 36)
+            // 分组栏宽度可拖动调整；最窄只留一个字的位置
+            let min = (self.conf.font_size + 10).max(18);
+            let max = (panel.w() - 120).max(min);
+            let w = self.conf.group_w.clamp(min, max);
+            self.conf.group_w = w;
+            w
         } else {
             0
         };
@@ -628,6 +638,11 @@ impl App {
             }
         }
         if self.conf.show_group {
+            // 分割线优先命中：一条 ±3px 的竖带，跨在分组栏右边界上
+            let sx = l.group.right;
+            if l.group.w() > 0 && x >= sx - 3 && x <= sx + 3 && y >= l.group.top && y <= l.group.bottom {
+                return Hit::Split;
+            }
             for (i, r) in l.gitems.iter().enumerate() {
                 if r.contains(x, y) {
                     return Hit::Group(i);
@@ -1347,6 +1362,10 @@ impl App {
             WM_MOUSEMOVE => {
                 let x = (l & 0xffff) as i16 as i32;
                 let y = ((l >> 16) & 0xffff) as i16 as i32;
+                if self.split_drag {
+                    self.drag_split(x);
+                    return Some(0);
+                }
                 if let Some((sx, sy, ox, oy)) = self.drag_start {
                     let mut pt = POINT { x: sx, y: sy };
                     unsafe {
@@ -1409,6 +1428,12 @@ impl App {
                             SetCapture(self.hwnd);
                         }
                     }
+                    Hit::Split => {
+                        self.split_drag = true;
+                        unsafe {
+                            SetCapture(self.hwnd);
+                        }
+                    }
                     _ => unsafe {
                         SetCapture(self.hwnd);
                     },
@@ -1423,6 +1448,7 @@ impl App {
                 }
                 let was_drag = self.drag_start.take().is_some();
                 let was_resize = self.resize_dir.take().is_some();
+                let was_split = std::mem::replace(&mut self.split_drag, false);
                 if let Some(d) = self.ldrag.take() {
                     if d.started {
                         self.pressed = None;
@@ -1433,7 +1459,7 @@ impl App {
                 }
                 let h = self.hit_at(x, y);
                 let pressed = self.pressed.take();
-                if was_resize || was_drag {
+                if was_resize || was_drag || was_split {
                     self.save_conf();
                     return Some(0);
                 }
@@ -1491,6 +1517,7 @@ impl App {
                     Hit::Edge(_) => IDC_SIZENESW,
                     // 图标上保持普通箭头，按下拖动时才变手
                     Hit::Link(_) => IDC_ARROW,
+                    Hit::Split => IDC_SIZEWE,
                     Hit::Group(_) | Hit::Close | Hit::Menu | Hit::Search | Hit::Row(_) | Hit::InputOk | Hit::InputCancel | Hit::FilterChip | Hit::OverlayBtn(_) => IDC_HAND,
                     Hit::InputField => IDC_IBEAM,
                     _ => IDC_ARROW,
@@ -1678,6 +1705,24 @@ impl App {
         self.drag_start = Some((pt.x, pt.y, wr.left, wr.top));
         unsafe {
             SetCapture(self.hwnd);
+        }
+    }
+
+    /// 拖动分组栏分割线：按鼠标位置换算新的分组栏宽度并即时重绘
+    fn drag_split(&mut self, x: i32) {
+        self.ensure_layout();
+        let panel = self.layout.panel;
+        let s = if self.conf.shadow { 12 } else { 0 };
+        let _ = s;
+        let min = (self.conf.font_size + 10).max(18);
+        let max = (panel.w() - 120).max(min);
+        let want = (x - panel.left).clamp(min, max);
+        if want != self.conf.group_w {
+            self.conf.group_w = want;
+            // 布局与静态层都以 group_w 作为缓存键，置脏即可让二者重算
+            self.lkey = 0;
+            self.bgkey = 0;
+            self.repaint();
         }
     }
 
@@ -2323,7 +2368,7 @@ impl App {
             ID_HIDE => self.toggle_show(),
             ID_ABOUT => unsafe {
                 let t = wide(
-                    "QuickLaunch 1.0.7\n\n\
+                    "QuickLaunch 1.0.8\n\n\
                      作者：黑山大叔\n\
                      主页：https://space.bilibili.com/19428259\n\
                      GitHub：https://github.com/heiheids\n\n\
@@ -2977,5 +3022,73 @@ fn make_icon(accent: u32) -> HICON {
         GdipCreateHICONFromBitmap(img, &mut hicon);
         GdipDisposeImage(img);
         hicon
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// 造一个 App 实例做布局/命中测试（不建窗口，hwnd 传空即可）
+    fn test_app(group_w: i32) -> App {
+        let dir = std::env::temp_dir().join(format!("ql_layout_{}_{}", group_w, std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut app = App::new(std::ptr::null_mut(), dir);
+        app.conf.show_group = true;
+        app.conf.show_title = true;
+        app.conf.shadow = true;
+        app.conf.w = 431;
+        app.conf.h = 640;
+        app.conf.font_size = 14;
+        app.conf.group_w = group_w;
+        app.overlay = Overlay::None;
+        app
+    }
+
+    #[test]
+    fn splitter_is_hittable() {
+        let mut app = test_app(84);
+        app.ensure_layout();
+        let g = app.layout.group;
+        let y = g.top + 40;
+        // 正落在竖线上
+        assert_eq!(app.hit_at(g.right, y), Hit::Split, "分割线应可命中");
+        // 线右侧 2px 也算（±3px 容错带）
+        assert_eq!(app.hit_at(g.right + 2, y), Hit::Split);
+        assert_eq!(app.hit_at(g.right - 2, y), Hit::Split);
+        // 离开容错带就不是了
+        assert_ne!(app.hit_at(g.right + 20, y), Hit::Split);
+        assert_ne!(app.hit_at(g.left + 10, y), Hit::Split);
+    }
+
+    #[test]
+    fn splitter_drag_resizes_and_clamps() {
+        let mut app = test_app(84);
+        app.ensure_layout();
+        let panel_left = app.layout.panel.left;
+
+        // 拖到中间：宽度跟随鼠标
+        app.drag_split(panel_left + 150);
+        assert_eq!(app.conf.group_w, 150, "宽度应跟随鼠标");
+
+        // 拖到最左：夹到下限，且仍能容纳一个字
+        app.drag_split(panel_left - 500);
+        let min = (app.conf.font_size + 10).max(18);
+        assert_eq!(app.conf.group_w, min, "应被夹到下限");
+        assert!(app.conf.group_w >= app.conf.font_size + 8, "下限要能放下一个字");
+
+        // 拖到最右：不能把内容区挤没
+        app.drag_split(panel_left + 5000);
+        let panel_w = app.layout.panel.w();
+        assert!(app.conf.group_w <= panel_w - 120, "内容区至少留 120px");
+    }
+
+    #[test]
+    fn narrow_group_keeps_body_usable() {
+        let mut app = test_app(84);
+        app.drag_split(app.layout.panel.left - 100);
+        app.ensure_layout();
+        assert!(app.layout.body.w() > 200, "分组栏最窄时内容区应足够宽");
+        assert!(!app.layout.gitems.is_empty(), "分组项仍应存在");
     }
 }

@@ -1,5 +1,41 @@
 # 更新说明 / Changelog
 
+## v1.0.8 — 2026-11-15
+
+### 中文
+
+**新增**
+
+- **分组栏宽度可拖动**：分组栏与快捷方式区之间那条竖线现在是可拖动的分隔条。
+  鼠标移上去光标变成左右箭头，左右拖动即时改变分组栏宽度，松手后写入
+  `conf.ini` 的 `nGroupWidth`，下次启动保持。
+- **分组栏最窄可缩到一个字宽**：以前有 `font_size*4+36` 的硬性下限（14 号字时约 92px），
+  现在下限改成按字号计算（`font_size + 10`，最少 18px），14 号字时最窄 24px，
+  正好放得下一个字。内容区始终至少保留 120px，不会被挤没。
+- 分割线有 ±3px 的容错带，不用精确点在那一像素上。
+
+**说明**
+
+- 只改了分隔条的交互与分组栏宽度下限，其余布局、配色、圆角、间距均未改动。
+
+### English
+
+**Added**
+
+- **Draggable group pane width**: the vertical line between the group pane and the shortcut
+  area is now a splitter. The cursor becomes a left-right arrow over it; dragging resizes the
+  pane live and the width is written to `nGroupWidth` in `conf.ini` on release, so it persists.
+- **The group pane can shrink to a single character wide**: the old hard floor of
+  `font_size*4+36` (about 92 px at font size 14) is replaced by a font-derived minimum
+  (`font_size + 10`, at least 18 px), which is 24 px at font size 14 — just enough for one
+  character. The content area always keeps at least 120 px.
+- The splitter has a ±3 px tolerance band, so you don't have to hit a single pixel.
+
+**Notes**
+
+- Only the splitter interaction and the width floor changed; the rest of the layout, colors,
+  corner radii and spacing are untouched.
+
 ## v1.0.7 — 2026-11-15
 
 ### 中文
