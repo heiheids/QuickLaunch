@@ -251,6 +251,11 @@ impl App {
         if app.db.group_index(app.conf.cur_group).is_none() {
             app.conf.cur_group = app.db.groups.first().map(|g| g.id).unwrap_or(0);
         }
+        // 历史数据迁移：早期版本把 .lnk 路径直接存库，桌面快捷方式一删条目就失效。
+        // 这里趁快捷方式文件还在，把它改写成真实目标。
+        if crate::shortcut::migrate(&mut app.db) {
+            app.db.save(&app.dir);
+        }
         app.last_w = app.conf.w;
         app.last_h = app.conf.h;
         app
@@ -2276,7 +2281,7 @@ impl App {
             ID_HIDE => self.toggle_show(),
             ID_ABOUT => unsafe {
                 let t = wide(
-                    "QuickLaunch 1.0.3\n\n\
+                    "QuickLaunch 1.0.6\n\n\
                      作者：黑山大叔\n\
                      主页：https://space.bilibili.com/19428259\n\
                      GitHub：https://github.com/heiheids\n\n\
@@ -2434,11 +2439,16 @@ impl App {
                 if l.kind == KIND_SYS {
                     return;
                 }
-                open_location(self.hwnd, &l.path);
+                crate::shell::open_location(self.hwnd, &l.path);
             }
             ID_PROPS => {
                 let l = self.db.links[li].clone();
                 let mut target = l.path.clone();
+                // 从快捷方式加进来的条目：优先显示快捷方式自己的属性（用户看到的
+                // 就是那个 .lnk），快捷方式已经不存在了再回退到目标程序。
+                if !l.src.is_empty() && Path::new(&l.src).exists() {
+                    target = l.src.clone();
+                }
                 let mut ok = !target.is_empty();
                 if l.kind == KIND_SYS {
                     match sys_item(&l.path) {
@@ -2446,12 +2456,9 @@ impl App {
                         _ => ok = false,
                     }
                 }
-                if ok {
-                    let p = wide(&target);
-                    let v = wide("properties");
-                    unsafe {
-                        ShellExecuteW(self.hwnd, v.as_ptr(), p.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
-                    }
+                if ok && !crate::shell::open_properties(self.hwnd, &target) {
+                    // 连 shell 都拒绝了：至少把所在位置打开，别让用户觉得没反应
+                    crate::shell::open_location(self.hwnd, &l.path);
                 }
             }
             ID_EDIT => {
@@ -2510,24 +2517,16 @@ impl App {
             }
             let mut added = 0;
             if parts.len() == 1 {
-                let full = parts[0].clone();
-                let name = Path::new(&full)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| full.clone());
-                self.add_link(&name, KIND_PROGRAM, &full);
-                added += 1;
+                if self.add_path(&parts[0]) {
+                    added += 1;
+                }
             } else if parts.len() > 1 {
                 let dir = parts[0].clone();
                 for f in &parts[1..] {
                     let full = format!("{}\\{}", dir, f);
-                    let name = Path::new(f)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| f.clone());
-                    let tag = self.db.ensure_tag(self.conf.cur_group);
-                    self.db.add_link(tag, &name, KIND_PROGRAM, &full, "", "", "", "", false);
-                    added += 1;
+                    if self.add_path(&full) {
+                        added += 1;
+                    }
                 }
             }
             if added > 0 {
@@ -2591,18 +2590,39 @@ impl App {
         }
     }
 
-    /// 把一个文件 / 文件夹路径加进当前分组；返回是否成功
+    /// 把一个文件 / 文件夹路径加进当前分组；返回是否成功。
+    /// 若拖进来的是 .lnk / .url 快捷方式，则解析成它指向的源程序再入库，
+    /// 这样删掉桌面上的快捷方式不会让条目失效。
     fn add_path(&mut self, full: &str) -> bool {
         if full.is_empty() {
             return false;
         }
+        let mut target = full.to_string();
+        let mut param = String::new();
+        let mut workdir = String::new();
+        let mut icon = String::new();
+        let mut kind = if Path::new(full).is_dir() { KIND_FOLDER } else { KIND_PROGRAM };
+        if crate::shortcut::is_shortcut(full) {
+            if let Some(r) = crate::shortcut::resolve(full) {
+                target = r.path;
+                param = r.param;
+                workdir = r.workdir;
+                icon = r.icon;
+                kind = r.kind;
+            }
+        }
         let name = Path::new(full)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| full.to_string());
-        let kind = if Path::new(full).is_dir() { KIND_FOLDER } else { KIND_PROGRAM };
+            .unwrap_or_else(|| target.clone());
         let tag = self.db.ensure_tag(self.conf.cur_group);
-        self.db.add_link(tag, &name, kind, full, "", "", "", "", false);
+        let id = self.db.add_link(tag, &name, kind, &target, &param, &workdir, &icon, "", false);
+        // 记下原始快捷方式，供“属性”打开快捷方式自己的属性窗口
+        if crate::shortcut::is_shortcut(full) {
+            if let Some(i) = self.db.link_index(id) {
+                self.db.links[i].src = full.to_string();
+            }
+        }
         true
     }
 
@@ -2739,13 +2759,6 @@ fn confirm(hwnd: HWND, text: &str) -> bool {
     }
 }
 
-fn open_location(hwnd: HWND, path: &str) {
-    unsafe {
-        let exe = wide("explorer.exe");
-        let arg = wide(&format!("/select,\"{}\"", path));
-        ShellExecuteW(hwnd, std::ptr::null(), exe.as_ptr(), arg.as_ptr(), std::ptr::null(), SW_SHOWNORMAL);
-    }
-}
 
 fn sys_dir(exe: &str) -> String {
     if exe.is_empty() {

@@ -1,5 +1,153 @@
 # 更新说明 / Changelog
 
+## v1.0.6 — 2026-11-15
+
+### 中文
+
+**修复**
+
+- **程序图标恢复**：v1.0.4 / v1.0.5 打出的 exe 图标与 1.0.3 不一致（Explorer 里显示错误）。
+  原因是 `build.rs` 里手写的 `.rsrc` 段生成器有两个错误：
+  1. 资源目录项指向子目录时，偏移的最高位必须置 `1`（`0x80000000`）；
+     漏置后根目录被当成数据项，整棵图标表都解析不出来。
+  2. 数据项的 `OffsetToData` 是 **RVA**，必须配一条 `IMAGE_REL_AMD64_ADDR32NB`
+     重定位，让链接器把“段内偏移”换算成“段 RVA + 偏移”。
+- 现已补齐子目录标志，并输出带段符号与重定位的 COFF 目标文件。
+
+**验证**
+
+- 新增 `examples/verify_icon.rs`：直接解析 PE 资源表，把 exe 内嵌的 6 张图标与
+  `res/app.ico` **逐字节**比对，结果 6/6 一致；与旧版 1.0.3 的 exe 图标逐像素比对，
+  差异 0/1024。
+- 该校验已并入 `build.ps1`，以后构建失败会直接报出来，不会再悄悄产出坏图标。
+
+### English
+
+**Fixed**
+
+- **Application icon restored**: builds from v1.0.4 / v1.0.5 produced an exe whose icon
+  differed from 1.0.3 (Explorer showed the wrong icon). Two bugs in the hand-written
+  `.rsrc` section generator in `build.rs`:
+  1. Directory entries pointing at a subdirectory must set the high bit of the offset
+     (`0x80000000`). Without it the root directory is read as a data entry and the whole
+     icon table is unparsable.
+  2. A data entry's `OffsetToData` is an **RVA**, so it needs an
+     `IMAGE_REL_AMD64_ADDR32NB` relocation for the linker to turn the section-relative
+     offset into "section RVA + offset".
+- The subdirectory flag is now set, and the emitted COFF object carries the section symbol
+  and relocations.
+
+**Verification**
+
+- New `examples/verify_icon.rs` parses the PE resource table and compares all six embedded
+  images with `res/app.ico` byte for byte — 6/6 identical. A pixel comparison against the
+  original 1.0.3 exe icon shows 0/1024 differing pixels.
+- This check is part of `build.ps1`, so a broken icon can no longer slip through silently.
+
+## v1.0.5 — 2026-11-15
+
+### 中文
+
+**修复**
+
+- **右键“属性”点了没反应**：以前用的是 `ShellExecuteW(hwnd, "properties", 路径)`，
+  而这个调用对 exe 和文件夹会返回 `31`（`SE_ERR_NOASSOC`）并且静默失败，
+  只有 `.lnk` 这类自身注册了 properties 动词的对象才碰巧能用。
+  现在改用 `ShellExecuteExW` + `SEE_MASK_INVOKEIDLIST`，exe、文件夹、快捷方式、网址都可靠。
+- **属性窗口指向哪一层**：条目现在连的是目标程序，属性窗口如果直接打开 exe，
+  看到的就是程序属性而不是快捷方式属性。因此新增 `src` 字段记录原始快捷方式路径，
+  右键“属性”优先打开那个 `.lnk` / `.url` 的属性窗口；
+  快捷方式已被删除时自动回退到目标程序属性。
+- 万一 shell 仍然拒绝，会退一步在资源管理器里选中该文件，不再出现“完全没反应”。
+
+**数据**
+
+- `links.txt` 的 L 行新增第 14 列 `src`（原始快捷方式路径）。
+  旧数据只有 13 列，加载时该字段为空，**完全兼容，无需迁移**；
+  由旧版迁移过来的 .lnk 条目在迁移时顺带把原路径写进 `src`。
+
+**其它**
+
+- “在文件夹中显示”与“属性”统一收进新模块 `src/shell.rs`，避免两处各自实现 shell 调用。
+
+### English
+
+**Fixed**
+
+- **Right-click → Properties did nothing**: the old code called
+  `ShellExecuteW(hwnd, "properties", path)`, which returns `31` (`SE_ERR_NOASSOC`) for
+  executables and folders and fails silently. Only `.lnk` objects — which register their own
+  properties verb — happened to work. It now uses `ShellExecuteExW` with
+  `SEE_MASK_INVOKEIDLIST`, which is reliable for exes, folders, shortcuts and URLs.
+- **Which object gets the property sheet**: entries now point at the target program, so opening
+  the exe's properties would no longer be the shortcut's properties. A new `src` field stores
+  the original shortcut path; Properties opens that `.lnk` / `.url` sheet when it still exists
+  and falls back to the target program otherwise.
+- If the shell still refuses, the containing folder is opened with the file selected, so the
+  action is never a no-op.
+
+**Data**
+
+- New 14th column `src` (original shortcut path) in `L` rows of `links.txt`. Files with only
+  13 columns load with an empty `src` — **fully backward compatible**, no migration needed.
+  Entries migrated from older versions record their `.lnk` path in `src` at migration time.
+
+**Other**
+
+- "Show in folder" and "Properties" now live in the new `src/shell.rs` module.
+
+## v1.0.4 — 2026-11-15
+
+### 中文
+
+**修复**
+
+- **快捷方式失效**：把桌面上的快捷方式（`.lnk`）拖进来后，以前存的是快捷方式自身的路径，
+  用户在桌面上把那个图标删掉，条目就再也启动不了。现在入库前会先把 `.lnk` 解析成它指向的
+  **源程序真实路径**，同时带出启动参数、工作目录和图标，删掉桌面图标不影响使用。
+- **网址快捷方式**：`.url` 文件同样会解析成真实网址并以网址类型保存，不再指向那个 `.url` 文件。
+- **历史数据自动修复**：启动时对仍然存在的 `.lnk` / `.url` 条目做一次静默迁移，
+  改写成真实目标后再保存；快捷方式已被删掉的条目保持原样，不做破坏性改动。
+- 解析支持多级快捷方式（快捷方式指向另一个快捷方式）、相对路径和环境变量（如 `%SystemRoot%`）。
+  指向应用商店应用（UWP）的快捷方式解析不出文件路径时，按原样保留。
+
+**实现**
+
+- 新增独立模块 `src/shortcut.rs`（约 320 行），通过系统自带 COM（`IShellLinkW` + `IPersistFile`）
+  读取快捷方式，**不引入任何第三方依赖**。
+- 拖放、`WM_DROPFILES`、以及“添加文件”对话框统一走 `add_path()`，行为一致。
+
+**构建**
+
+- 本机无 windres 时，`build.rs` 会用纯 Rust 直接生成 `.rsrc` 段目标文件再交给链接器，
+  程序图标照常嵌入 exe（零第三方工具）。
+
+### English
+
+**Fixed**
+
+- **Broken shortcuts**: dragging a desktop `.lnk` in used to store the shortcut's own path, so
+  deleting the desktop icon permanently broke the entry. The shortcut is now resolved to the
+  **target program's real path** at insert time, together with its arguments, working directory
+  and icon, so removing the desktop icon no longer matters.
+- **Internet shortcuts**: `.url` files are resolved to the actual URL and stored as a URL entry.
+- **Automatic repair of existing data**: on startup, entries whose `.lnk` / `.url` still exists are
+  silently migrated to the real target and saved. Entries whose shortcut is already gone are left
+  untouched — nothing destructive.
+- Resolution follows chained shortcuts, relative paths and environment variables
+  (e.g. `%SystemRoot%`). UWP / Store-app shortcuts without a file path are kept as-is.
+
+**Implementation**
+
+- New self-contained module `src/shortcut.rs` (~320 lines) using the built-in COM interfaces
+  `IShellLinkW` + `IPersistFile` — still **zero third-party dependencies**.
+- Drag & drop, `WM_DROPFILES` and the "Add file" dialog all go through `add_path()`.
+
+**Build**
+
+- When `windres` is unavailable, `build.rs` now emits the `.rsrc` COFF object by itself in pure
+  Rust, so the exe keeps its icon without any external tool.
+
 ## v1.0.3 — 2026-11-06
 
 ### 中文

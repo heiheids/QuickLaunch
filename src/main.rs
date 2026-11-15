@@ -5,6 +5,8 @@ mod data;
 mod drop;
 mod gfx;
 mod icons;
+mod shell;
+mod shortcut;
 mod win;
 
 use app::App;

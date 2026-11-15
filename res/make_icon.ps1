@@ -1,8 +1,20 @@
 Add-Type -AssemblyName System.Drawing
 
-$src = 'D:\@工作区\迅捷启动\res\source2.png'
-$outPng = 'D:\@工作区\迅捷启动\res\app.png'
-$outIco = 'D:\@工作区\迅捷启动\res\app.ico'
+# 路径相对脚本所在目录，整个工程挪到哪都能跑；
+# 也允许在工程根目录下直接运行（自动找 res\）
+$here = $PSScriptRoot
+if (-not $here -and $MyInvocation.MyCommand.Path) {
+    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if (-not $here) { $here = (Get-Location).Path }
+if (-not (Test-Path (Join-Path $here 'source2.png'))) {
+    $sub = Join-Path $here 'res'
+    if (Test-Path (Join-Path $sub 'source2.png')) { $here = $sub }
+}
+
+$src = Join-Path $here 'source2.png'
+$outPng = Join-Path $here 'app.png'
+$outIco = Join-Path $here 'app.ico'
 
 $bmp = [System.Drawing.Bitmap]::FromFile($src)
 $w = $bmp.Width; $h = $bmp.Height

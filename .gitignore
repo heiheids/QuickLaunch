@@ -4,10 +4,30 @@
 # 本地运行目录（含个人数据：链接、配置、图标缓存）
 /dist
 /cache
+/db
+/conf.ini
 bench.txt
 
 # 对第三方程序的分析资料，不随源码发布
 /分析
 
-# 打包产物
+# 打包产物与备份
 *.zip
+/备份
+/.pack
+/.probe
+
+# 工程内本地 Rust 工具链（体积大，按需安装，见 build.ps1）
+/.rust
+
+# 编辑器 / 系统临时文件
+*.log
+*.pdb
+*.ilk
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 工程本地维护记录（备份日志，含本机操作痕迹，不进公开仓库）
+/QuickLaunch工程备份.txt

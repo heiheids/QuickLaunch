@@ -1,0 +1,77 @@
+QuickLaunch v1.0.4 — User Guide (English)
+================================================================
+
+1. What it is
+----------------------------------------------------------------
+A small launcher panel for Windows. Written from scratch in Rust against raw
+Win32 / GDI+ — a single portable executable, zero third-party dependencies,
+no registry keys (a startup shortcut is only created if you enable
+"run at boot").
+
+2. Start and summon
+----------------------------------------------------------------
+1. Double-click QuickLaunch.exe. It stays in the system tray.
+2. Default global hotkey: Ctrl + Alt + Q (changeable in Settings).
+3. Left-click / double-click the tray icon to summon. Closing the window
+   hides it to the tray.
+4. Tray context menu has "Exit"; data is saved on exit.
+
+3. Adding items
+----------------------------------------------------------------
+Method 1: drag files, folders or shortcuts from the desktop / Explorer into
+          the window.
+Method 2: right-click empty space -> "Add program or file" / "Add folder".
+Method 3: right-click menu -> "Add URL".
+
+* What's new in this version: a dropped shortcut (.lnk) is resolved to the
+  program it points to. If you drop "Notepad - Shortcut" from the desktop,
+  the entry stores C:\Windows\system32\notepad.exe instead, so deleting the
+  desktop icon no longer breaks it. Internet shortcuts (.url) are resolved to
+  the real URL in the same way.
+
+  Entries left over from older versions that still point at a .lnk are
+  silently corrected on the next start, as long as the .lnk file still
+  exists. Only the path is rewritten, never the name.
+
+4. Everyday use
+----------------------------------------------------------------
+- Click an icon to launch; right-click for the menu (open location /
+  properties / rename / move / delete ...).
+- "Run as administrator" launches with elevation.
+- Hold and drag an icon more than 5 px to reorder; the order is saved on
+  release.
+- Right-click -> Properties opens the property sheet of the shortcut the entry came from
+  (it falls back to the program's own properties once that shortcut is gone).
+- The search box at the top filters by name / path / remark as you type.
+- Ctrl / Shift + click multi-selects for batch run or delete.
+- Right-click the group bar to create / rename / delete groups and reorder.
+
+5. Settings
+----------------------------------------------------------------
+Icon size (small / medium / large), view (tile / list), always on top,
+window shadow, opacity, font size, show date, base color (the whole palette
+is derived from it), global hotkey and run-at-boot.
+
+6. Where the data lives
+----------------------------------------------------------------
+Everything sits next to the exe; delete the folder to uninstall completely:
+  conf.ini          window geometry, colors, hotkey
+  db\links.txt      groups / tags / links (tab-separated plain text)
+  cache\icons\      icon cache, safe to delete any time
+
+7. FAQ
+----------------------------------------------------------------
+Q: The dropped item is named "... - Shortcut". Why?
+A: The name comes from the shortcut's file name, matching what you see on
+   the desktop. Rename it from the context menu if you prefer.
+
+Q: A Store (UWP) app shortcut was not resolved.
+A: Those shortcuts have no plain file path; the entry is kept as-is and
+   still works.
+
+Q: I moved the program to another folder / PC.
+A: Copy the whole folder. All data is relative, no reconfiguration needed.
+
+Q: Antivirus complains.
+A: Unsigned, tiny, and it launches other programs through ShellExecute —
+   a common false positive. Whitelist it if needed.

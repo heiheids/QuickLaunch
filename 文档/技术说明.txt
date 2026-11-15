@@ -1,0 +1,107 @@
+QuickLaunch v1.0.4 技术说明
+================================================================
+
+一、工程结构（模块化，无巨型单文件）
+----------------------------------------------------------------
+src/main.rs        入口：GDI+ 初始化、单实例、窗口类、消息循环（约 145 行）
+src/app.rs         主窗口：布局、自绘、命中测试、菜单、设置、启动（约 2940 行，历史遗留，待继续拆分）
+src/data.rs        数据模型与持久化：conf.ini + db\links.txt 的读写、配色派生
+src/drop.rs        OLE 拖放目标（IDropTarget）：普通文件 + 桌面虚拟项
+src/shortcut.rs    .lnk / .url 解析（v1.0.4 新增，约 320 行）
+src/shell.rs       ★ v1.0.5 新增：Shell 动作（属性窗口、在文件夹中显示）
+src/gfx.rs         GDI+ 封装：圆角矩形、文字、位图、颜色工具
+src/icons.rs       图标提取与缓存（PrivateExtractIcons / 系统图像列表 / 图片缩略图）
+src/win.rs         手写 Win32 FFI 声明（无 windows-rs crate）
+build.rs           构建脚本：GDI+ 链接参数 + 图标资源（windres 或纯 Rust 生成 .rsrc）
+
+二、本次修复的技术要点
+----------------------------------------------------------------
+问题：拖入桌面快捷方式后，数据库里存的是 .lnk 自身的路径。
+      用户在桌面上删掉快捷方式，条目永久失效。
+
+修复策略：把快捷方式当作“线索”，在入库那一刻解析成源程序。
+
+1) src/shortcut.rs 用系统 COM 读取（不引入 windows-rs，避免第三方依赖）：
+   CoCreateInstance(CLSID_ShellLink) -> IShellLinkW
+     GetPath(buf, 2048, NULL, 0)       目标路径（自动展开环境变量）
+     GetArguments / GetWorkingDirectory 启动参数、工作目录
+     GetIconLocation                   图标位置（形如 "C:\x.dll,3"）
+   QI(IID_IPersistFile) -> Load(lnk)    载入文件
+   注意：IShellLinkW 虚表槽位顺序必须与 shlobj.h 一致（GetPath=3，
+   GetWorkingDirectory=8，GetArguments=10，GetIconLocation=16，SetPath=20），
+   错一个槽位就会调用到别的函数上 —— 这是最容易踩的坑。
+
+2) 兜底规则：
+   - 目标为空（UWP / 应用商店应用）→ 返回 None，调用方保留原 .lnk 路径。
+   - 相对路径 → 相对 .lnk 所在目录拼接。
+   - 链式快捷方式（.lnk 指向 .lnk）→ 最多解析 4 层，防止死循环。
+   - 工作目录为空 → 用目标所在目录。
+   - 目标不存在也照常保存（用户可能只是暂时移走了盘符）。
+
+3) 统一入口：WM_DROP_ITEMS（OLE 拖放）、WM_DROPFILES、"添加文件"对话框
+   全部走 App::add_path()，避免三处逻辑各写一遍。
+
+4) 历史数据迁移：App::new() 里调用 shortcut::migrate()，
+   只处理“路径仍是 .lnk/.url 且文件确实存在”的条目，
+   改写 path / param / workdir / icon / kind，随后保存。
+   已被删掉的快捷方式条目原样保留（不猜测、不破坏）。
+
+5) 图标嵌入：本机没有 windres 时，build.rs 用纯 Rust 生成一个只含 .rsrc 段的
+   COFF 目标文件（根目录 -> RT_ICON 3 / RT_GROUP_ICON 14 -> 数据项），
+   由 rustc 作为链接入参传入；GNU ld 会自动合并 .rsrc 段并填好 PE 资源表。
+   验证方式：读取 exe 的 PE 可选头，第 3 项数据目录（资源表）RVA 非 0，
+   且大小等于 ico 数据大小。
+
+三、v1.0.5：右键“属性”点了没反应
+----------------------------------------------------------------
+现象：右键图标 -> 属性，什么也不发生。
+
+根因：老代码是
+      ShellExecuteW(hwnd, "properties", path, NULL, NULL, SW_SHOWNORMAL)
+      实测返回值：exe = 31、文件夹 = 31、.lnk = 42（大于 32 才算成功）。
+      31 即 SE_ERR_NOASSOC，而 ShellExecuteW 不会弹错误框，于是表现为静默失败。
+      只有 .lnk 这种自身注册了 properties 动词的 shell 对象才碰巧能用。
+
+修复：src/shell.rs 的 open_properties() 改用
+      ShellExecuteExW + fMask = SEE_MASK_INVOKEIDLIST (0x0C)、lpVerb = "properties"。
+      实测 exe / 文件夹 / .lnk 全部返回 TRUE。
+      万一仍然失败，退化为 explorer /select 定位文件，保证不会毫无反应。
+
+第二个语义问题：v1.0.4 起条目存的是目标程序路径，
+      直接对目标 exe 开属性，用户看到的是“程序属性”而不是他拖进来的“快捷方式属性”。
+      因此 Link 增加 src 字段（links.txt 第 14 列）保存原始 .lnk / .url 路径，
+      属性窗口优先打开 src；src 不存在了再回退到 path。
+
+四、验证手段
+----------------------------------------------------------------
+cargo test --release 共 10 项：
+  shortcut::resolve_real_lnk        用 COM 现场生成 .lnk 再解析（端到端）
+  shortcut::migrate_rewrites_lnk_entry  验证历史条目被正确改写（含 src 留档）
+  shortcut::url_file_parse          .url 解析
+  shortcut::ext_detect / plain_file_untouched  扩展名与普通文件不受影响
+  data::link_src_column_roundtrip   第 14 列存取 + 旧 13 列数据兼容
+  shell::empty_path_rejected / missing_path_rejected  属性调用前置校验
+  drop::cida_this_pc / cida_recycle_bin  原有虚拟项解析未回归
+
+另外 examples\probe_props.rs 是开发期实测工具（不参与正式构建），
+用来说明“为什么必须用 ShellExecuteEx”，也可随时复跑：
+  cargo run --release --example probe_props -- --self-test
+
+五、已知限制
+----------------------------------------------------------------
+1. 界面文案目前仍硬编码中文，尚未接入多语言配置文件（下一步计划：把字符串
+   抽到 lang\zh-CN.txt / en-US.txt，按系统语言自动选择，设置里可手动切换）。
+2. src/app.rs 仍偏大（约 2940 行），后续按“布局 / 菜单 / 设置 / 启动”继续拆分。
+3. 快捷方式解析依赖 COM 已初始化；程序启动时 drop::register() 已调用
+   OleInitialize，若将来去掉该调用需自行补 CoInitializeEx。
+
+六、构建方法
+----------------------------------------------------------------
+Windows + PowerShell 7：
+  .\build.ps1            （或手动）
+  cargo build --release
+产物：target\release\QuickLaunch.exe（单文件，约 480 KB）
+
+本机工具链装在工程内 .rust\ 目录（不入包）：
+  RUSTUP_HOME=.rust\rustup  CARGO_HOME=.rust\cargo
+  默认 host：x86_64-pc-windows-gnu（自带 MinGW 链接器，无需 VS 生成工具）

@@ -466,6 +466,8 @@ pub const SHGFI_PIDL: u32 = 0x0000_0008;
 
 pub const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
 pub const SEE_MASK_FLAG_NO_UI: u32 = 0x0000_0400;
+/// 通过 shell item 调用动词（属性 / 打开方式 等必须带这个标志）
+pub const SEE_MASK_INVOKEIDLIST: u32 = 0x0000_000C;
 
 pub const DIB_RGB_COLORS: u32 = 0;
 pub const BI_RGB: u32 = 0;

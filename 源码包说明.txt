@@ -1,0 +1,22 @@
+QuickLaunch 1.0.6 源码包
+================================================================
+
+本包为 QuickLaunch 1.0.6 的完整源码与技术文档，不含编译产物。
+编译方法见 README.txt / README.md，简要步骤：
+
+    rustup target add x86_64-pc-windows-gnu
+    cargo build --release
+    产物：target\release\QuickLaunch.exe
+
+图标资源：
+    需要 windres（MinGW/MSYS2 自带）。找不到时会跳过图标资源，
+    构建仍然成功，只是 exe 没有文件图标。
+        set WINDRES=C:\path\to\windres.exe
+    res\app.ico 已预先生成好，直接构建即可；
+    若要改图，替换 res\source2.png 后运行 res\make_icon.ps1。
+
+文档：
+    README.txt    中英文使用说明
+    README.md     详细功能与界面说明
+    技术文档.md   架构 / 绘制管线 / 数据结构 / 踩坑记录（含英文摘要）
+    CHANGELOG.md  版本历史

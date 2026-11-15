@@ -40,6 +40,10 @@ pub struct Link {
     pub admin: bool,
     /// 组内排序（拖动图标改位置时写回；0 表示未排过，按 id 兜底）
     pub order: u32,
+    /// 原始快捷方式路径（.lnk / .url）。条目本身连的是目标程序，
+    /// 这里留着是为了“属性”能打开快捷方式自己的属性窗口。
+    /// 空 = 不是从快捷方式加进来的。
+    pub src: String,
 }
 
 pub struct Db {
@@ -122,6 +126,7 @@ impl Db {
             run_count: 0,
             admin,
             order,
+            src: String::new(),
         });
         id
     }
@@ -252,6 +257,7 @@ impl Db {
                                 run_count: f[10].parse().unwrap_or(0),
                                 admin: f[11] == "1",
                                 order: f.get(12).and_then(|s| s.parse().ok()).unwrap_or(0),
+                                src: f.get(13).cloned().unwrap_or_default(),
                             });
                         }
                     }
@@ -286,7 +292,7 @@ impl Db {
         }
         for l in &self.links {
             out.push_str(&format!(
-                "L\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "L\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 l.id,
                 l.tag,
                 esc(&l.name),
@@ -298,7 +304,8 @@ impl Db {
                 esc(&l.remark),
                 l.run_count,
                 if l.admin { 1 } else { 0 },
-                l.order
+                l.order,
+                esc(&l.src)
             ));
         }
         let _ = fs::write(d.join("links.txt"), out);
@@ -617,5 +624,49 @@ impl Conf {
             crate::gfx::color_to_hex(self.c_border),
         );
         let _ = fs::write(Conf::path(dir), s);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 第 14 列 src（原始快捷方式）要能原样存取，且旧数据（只有 13 列）仍可加载
+    #[test]
+    fn link_src_column_roundtrip() {
+        let dir = std::env::temp_dir().join("ql_data_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let mut db = Db::empty();
+        let g = db.groups[0].id;
+        let t = db.ensure_tag(g);
+        let id = db.add_link(t, "记事本", KIND_PROGRAM, r"C:\Windows\notepad.exe", "", "", "", "", false);
+        let i = db.link_index(id).unwrap();
+        db.links[i].src = r"C:\Users\x\Desktop\记事本 - 快捷方式.lnk".to_string();
+        db.save(&dir);
+
+        let back = Db::load(&dir).expect("加载失败");
+        assert_eq!(back.links[0].path, r"C:\Windows\notepad.exe");
+        assert_eq!(back.links[0].src, r"C:\Users\x\Desktop\记事本 - 快捷方式.lnk");
+
+        // 模拟旧版本数据：没有第 14 列
+        let p = dir.join("db").join("links.txt");
+        let old = std::fs::read_to_string(&p).unwrap();
+        let trimmed: String = old
+            .lines()
+            .map(|l| {
+                if l.starts_with("L\t") {
+                    let f: Vec<&str> = l.split('\t').collect();
+                    f[..13].join("\t")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&p, trimmed).unwrap();
+        let back2 = Db::load(&dir).expect("旧数据加载失败");
+        assert_eq!(back2.links[0].src, "", "旧数据 src 应为空而不是报错");
+        assert_eq!(back2.links[0].path, r"C:\Windows\notepad.exe");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
