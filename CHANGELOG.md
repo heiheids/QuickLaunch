@@ -1,5 +1,46 @@
 # 更新说明 / Changelog
 
+## v1.0.9 — 2026-11-15
+
+### 中文
+
+**改进**
+
+- **窗口阴影收窄一半、颜色变淡**：阴影带宽 12px → 6px，起始不透明度 18 → 6。
+  实测（面板左边缘往外的亮度梯度，255 为纯白）：
+  改前 `253 231 216 203 191 185 181 179`（向外铺 8px，边缘最暗 179）；
+  改后 `251 240 234 232`（只铺 4px，边缘 232）。
+  阴影带更薄、边缘也不再发闷。
+- 窗口总尺寸不变，因此可视面板四周各多出 6px 可用空间。
+
+**实现**
+
+- 新增常量 `SHADOW_W`（=6），替换原先散落在 `build_layout`、`drag_split`、
+  阴影绘制三处的硬编码 12，以后调宽度只需改这一个值。
+- 阴影层间距与带宽同步缩放（`(9-i)*0.8` → `(9-i)*0.4`）；
+  否则层会画到画布外被裁掉，看起来像硬边。
+- 因为带宽减半后各层叠得更密，起始 alpha 必须一起降（18 → 6），
+  不然边缘反而比原来更黑。
+
+### English
+
+**Improved**
+
+- **Window shadow is half as wide and lighter**: band 12 px → 6 px, start alpha 18 → 6.
+  Measured luminance gradient outward from the left panel edge (255 = white):
+  before `253 231 216 203 191 185 181 179` (spread over 8 px, darkest 179);
+  after `251 240 234 232` (spread over 4 px, darkest 232).
+- The window size is unchanged, so the visible panel gains 6 px on each side.
+
+**Implementation**
+
+- New `SHADOW_W` constant (=6) replaces the hard-coded 12 that was repeated in
+  `build_layout`, `drag_split` and the shadow painting code.
+- Layer spacing scales with the band width (`(9-i)*0.8` → `(9-i)*0.4`); otherwise the
+  layers fall outside the canvas and get clipped into a hard edge.
+- Because the narrower band stacks the layers more densely, the start alpha had to drop
+  (18 → 6) — leaving it would have made the edge darker than before.
+
 ## v1.0.8 — 2026-11-15
 
 ### 中文

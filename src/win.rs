@@ -811,6 +811,8 @@ extern "system" {
     pub fn GdipGetImageWidth(img: GpImage, w: *mut u32) -> GpStatus;
     pub fn GdipGetImageHeight(img: GpImage, h: *mut u32) -> GpStatus;
     pub fn GdipDeleteGraphics(g: GpGraphics) -> GpStatus;
+    /// 把 GDI+ 缓冲的绘制指令强制刷到目标位图（0=FlushIntentionFlush，1=Sync）
+    pub fn GdipFlush(g: GpGraphics, intention: i32) -> GpStatus;
     pub fn GdipGraphicsClear(g: GpGraphics, color: u32) -> GpStatus;
     pub fn GdipSetSmoothingMode(g: GpGraphics, m: INT) -> GpStatus;
     pub fn GdipSetTextRenderingHint(g: GpGraphics, h: INT) -> GpStatus;

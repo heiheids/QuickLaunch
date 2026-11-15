@@ -46,6 +46,9 @@ const ID_EXIT: usize = 55;
 const ID_HIDE: usize = 56;
 const ID_SYS_BASE: usize = 200;
 
+/// 窗口四周阴影带宽度（像素）。阴影绘制、面板内缩、拖动换算都以它为准。
+const SHADOW_W: i32 = 6;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hit {
     None,
@@ -440,7 +443,7 @@ impl App {
     }
 
     fn build_layout(&mut self) -> Layout {
-        let s = if self.conf.shadow { 12 } else { 0 };
+        let s = if self.conf.shadow { SHADOW_W } else { 0 };
         let panel = RECT::new(s, s, self.conf.w - s, self.conf.h - s);
         let title_h = if self.conf.show_title { 40 } else { 0 };
         let title = RECT::new(panel.left, panel.top, panel.right, panel.top + title_h);
@@ -730,10 +733,12 @@ impl App {
         let fs = c.font_size;
         self.bg.clear(0);
         if c.shadow {
-            let s = 12;
+            let s = SHADOW_W;
+            // 8 层由外向内叠：越靠外越淡。带宽减半后层间距同步减半，
+            // 单位面积叠得更密，所以起始 alpha 也要比原来低，否则边缘反而更黑。
             for i in 0..8 {
-                let a = (18 - i * 2).max(2) as u8;
-                let off = (9 - i) as f32 * 0.8;
+                let a = (6 - i).max(1) as u8;
+                let off = (9 - i) as f32 * 0.4;
                 self.bg.fill_round(
                     RECTF {
                         x: s as f32 - off,
@@ -1712,7 +1717,7 @@ impl App {
     fn drag_split(&mut self, x: i32) {
         self.ensure_layout();
         let panel = self.layout.panel;
-        let s = if self.conf.shadow { 12 } else { 0 };
+        let s = if self.conf.shadow { SHADOW_W } else { 0 };
         let _ = s;
         let min = (self.conf.font_size + 10).max(18);
         let max = (panel.w() - 120).max(min);
@@ -2368,7 +2373,7 @@ impl App {
             ID_HIDE => self.toggle_show(),
             ID_ABOUT => unsafe {
                 let t = wide(
-                    "QuickLaunch 1.0.8\n\n\
+                    "QuickLaunch 1.0.9\n\n\
                      作者：黑山大叔\n\
                      主页：https://space.bilibili.com/19428259\n\
                      GitHub：https://github.com/heiheids\n\n\
@@ -3090,5 +3095,86 @@ mod layout_tests {
         app.ensure_layout();
         assert!(app.layout.body.w() > 200, "分组栏最窄时内容区应足够宽");
         assert!(!app.layout.gitems.is_empty(), "分组项仍应存在");
+    }
+}
+
+#[cfg(test)]
+mod shadow_snapshot {
+    use super::*;
+
+    /// 导出静态层为 BMP，用于肉眼确认阴影宽度与浓淡。
+    /// 只在设置了 QL_SNAPSHOT 环境变量时才写文件，正常测试不落盘。
+    #[test]
+    fn dump_shadow() {
+        let Ok(out) = std::env::var("QL_SNAPSHOT") else { return };
+        // 测试进程不会走 main()，必须自己初始化 GDI+，否则所有绘制都是空操作
+        unsafe {
+            let mut token: usize = 0;
+            let input = GdiplusStartupInput {
+                GdiplusVersion: 1,
+                DebugEventCallback: std::ptr::null_mut(),
+                SuppressBackgroundThread: 0,
+                SuppressExternalCodecs: 0,
+            };
+            GdiplusStartup(&mut token, &input, std::ptr::null_mut());
+        }
+        let mut app = App::new(std::ptr::null_mut(), std::env::temp_dir().join("ql_shadow_probe"));
+        app.conf.shadow = true;
+        app.conf.show_group = true;
+        app.conf.show_title = true;
+        app.conf.w = 431;
+        app.conf.h = 300;
+        app.conf.group_w = 84;
+        app.overlay = Overlay::None;
+        app.ensure_layout();
+        let l = app.layout.clone();
+        let c = app.conf.clone();
+        app.ensure_bg(&l, &c, "2026-11-15");
+
+        // GDI+ 会缓冲绘制，必须先把指令刷到 DIB 内存，否则读到的全是 0
+        unsafe {
+            GdipFlush(app.bg.g, 1); // FlushIntentionSync
+        }
+        // Canvas.bits 是预乘 ARGB，这里合成到白底，方便查看
+        let w = app.bg.w as usize;
+        let h = app.bg.h as usize;
+        let bits = unsafe { std::slice::from_raw_parts(app.bg.bits, w * h) };
+        let mut rgb: Vec<u8> = Vec::with_capacity(w * h * 3);
+        for y in (0..h).rev() {
+            for x in 0..w {
+                let p = bits[y * w + x];
+                let a = (p >> 24) & 0xff;
+                let r = ((p >> 16) & 0xff) + 255 * (255 - a) / 255;
+                let g = ((p >> 8) & 0xff) + 255 * (255 - a) / 255;
+                let b = (p & 0xff) + 255 * (255 - a) / 255;
+                rgb.push(b.min(255) as u8);
+                rgb.push(g.min(255) as u8);
+                rgb.push(r.min(255) as u8);
+            }
+        }
+        // 24 位 BMP（自下而上，行按 4 字节对齐）
+        let row = (w * 3 + 3) & !3;
+        let mut bmp: Vec<u8> = Vec::new();
+        let file_size = 54 + row * h;
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&(file_size as u32).to_le_bytes());
+        bmp.extend_from_slice(&[0, 0, 0, 0]);
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&(w as i32).to_le_bytes());
+        bmp.extend_from_slice(&(h as i32).to_le_bytes());
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&24u16.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&((row * h) as u32).to_le_bytes());
+        bmp.extend_from_slice(&[0; 16]);
+        for y in 0..h {
+            let s = y * w * 3;
+            bmp.extend_from_slice(&rgb[s..s + w * 3]);
+            for _ in 0..(row - w * 3) {
+                bmp.push(0);
+            }
+        }
+        let _ = std::fs::write(&out, bmp);
     }
 }
